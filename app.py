@@ -77,13 +77,13 @@ if data_loaded:
             )
             st.plotly_chart(fig_salary, use_container_width=True)
 
-            # Visualization 2: Automation Risk (Histogram for all industries)
-            # This is better done on the full dataset to show relative distribution
+            # Visualization 2: Automation Risk Distribution for the Selected Industry
+            # **FIXED**: Now uses filtered_df to show risk only for the selected industry.
             fig_auto = px.histogram(
-                df, 
+                filtered_df, 
                 x="Automation_Risk_Label", 
                 color="AI_Adoption_Level",
-                title="Automation Risk Distribution by AI Adoption Level (Global)",
+                title=f"Automation Risk Distribution in {selected_industry}", # <-- Title updated
                 labels={'Automation_Risk_Label': 'Automation Risk Level'},
                 category_orders={"Automation_Risk_Label": ['Low/None', 'Moderate', 'High/Advanced']},
                 color_discrete_sequence=px.colors.qualitative.G10
