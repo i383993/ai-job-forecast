@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import joblib # New Import
-from sklearn.preprocessing import LabelEncoder # New Import
+import joblib 
+from sklearn.preprocessing import LabelEncoder
 import numpy as np
+from sklearn.model_selection import train_test_split # New Import for Training
+from sklearn.ensemble import RandomForestRegressor # New Model Import
 
 # --- Configuration and Data Loading ---
 
@@ -57,6 +59,7 @@ try:
         ALL_FEATURE_COLS.remove('Salary_USD')
 
     # 2. Identify the columns that are based on user input (the original object columns)
+    # The columns that the model expects are the 4 user-selected plus the 5 imputed
     USER_INPUT_COLS = ['AI_Adoption_Level', 'Automation_Risk_Label', 'Industry', 'Job_Title']
     
     # 3. Identify columns that need imputation (The "other 5" features)
@@ -67,17 +70,55 @@ try:
     for col in IMPUTATION_COLS:
         NUMERIC_MEANS[col] = df[col].mean()
 
-    # Load the trained model
+    # --- New Model Training and Loading ---
+    
+    def train_random_forest(data_frame, feature_cols, target_col='Salary_USD'):
+        # 1. Prepare data (use ALL_FEATURE_COLS which has 9 features)
+        X = data_frame[feature_cols].copy()
+        y = data_frame[target_col].copy()
+
+        # Drop rows with NaN in target or features (critical for training)
+        valid_indices = X.dropna().index.intersection(y.dropna().index)
+        X = X.loc[valid_indices]
+        y = y.loc[valid_indices]
+        
+        if X.empty:
+            st.warning("Cannot train model: Data is empty after handling NaNs. Prediction will not work.")
+            return None
+
+        # 2. Train the model
+        # Using a small max_depth for faster training in a web app environment
+        rf_model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1, max_depth=8)
+        rf_model.fit(X, y)
+        
+        return rf_model
+
+    # Attempt to load or train a model (Replacing the old loading logic)
+    regression_model = None
+    model_loaded = False
+    model_name = "None"
+    
     try:
-        regression_model = joblib.load("multiple_regression_model.pkl")
-        model_loaded = True
-        # Sanity check: verify model expects 9 features (as per error report)
-        if len(ALL_FEATURE_COLS) != 9:
-             st.warning(f"Feature count mismatch detected during setup. Training data had {len(ALL_FEATURE_COLS)} features, but the model expects 9. Prediction might be unstable.")
+        # Try to train the new Random Forest model immediately
+        regression_model = train_random_forest(df, ALL_FEATURE_COLS)
+        if regression_model is not None:
+             model_loaded = True
+             model_name = "Random Forest Regressor (Live Trained)"
+             st.sidebar.success(f"Model Ready: {model_name}")
+        else:
+            # If training failed, try to load the original pre-trained model as a fallback
+            regression_model = joblib.load("multiple_regression_model.pkl")
+            model_loaded = True
+            model_name = "Linear Regression (Fallback)"
+            st.sidebar.warning(f"Using Fallback Model: {model_name}")
+
     except FileNotFoundError:
-        st.error("Error: 'multiple_regression_model.pkl' not found. Cannot perform salary prediction.")
+        st.error("Error: Could not load any prediction model file (multiple_regression_model.pkl).")
         model_loaded = False
-        regression_model = None
+    except Exception as e:
+        st.error(f"Error during model setup: {e}")
+        model_loaded = False
+
 
     data_loaded = True
 except FileNotFoundError:
@@ -242,7 +283,7 @@ if data_loaded:
         st.markdown("Estimate a job's potential salary based on its core characteristics.")
 
         if not model_loaded:
-            st.warning("Prediction is unavailable because the model file could not be loaded.")
+            st.warning("Prediction is unavailable because the model could not be loaded or trained.")
         else:
             # 1. Collect user inputs
             # Use the original object columns for user selection, but the encoded columns for prediction
@@ -320,4 +361,4 @@ if data_loaded:
                     # This line is crucial for diagnosis and will show the user what went wrong with the shape
                     st.error(f"Debug Info: Predicted feature count: {len(X_predict_ordered)}. Expected feature count: 9.")
 
-st.caption("Developed by Isaiah Panicker • Data Science Project")
+st.caption(f"Developed by Isaiah Panicker • Data Science Project • Using {model_name}")
