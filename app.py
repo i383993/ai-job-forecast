@@ -23,7 +23,8 @@ try:
         df['Automation_Risk_Label'] = df['Automation_Risk'].map(risk_map).fillna('Unknown')
     else:
         df['Automation_Risk_Label'] = df['Automation_Risk']
-        df['Automation_Risk'] = df['Automation_Risk_Label'].map({v: k for k, v in risk_map.items()}) # Reverse map for consistency
+        # Reverse map for consistency, assuming the original training script converted this column to int
+        df['Automation_Risk'] = df['Automation_Risk_Label'].map({v: k for k, v in risk_map.items()}).fillna(-1) 
 
     # Ensure all text is stripped of whitespace for consistent encoding
     df = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)
@@ -42,14 +43,37 @@ try:
             # Fit on all unique values in the column
             le.fit(data_frame[col].astype(str).unique())
             ENCODER_MAP[col] = le
+            # Transform the columns in the main DataFrame
+            data_frame[col] = le.transform(data_frame[col].astype(str))
     
-    # Run the setup
+    # Run the setup - This transforms the categorical columns to their encoded integer values
     fit_encoders(df)
+
+    # --- Robust Feature Handling for Prediction (The Fix) ---
+    
+    # 1. Get the list of ALL features the model was trained on (all numeric columns minus the target)
+    ALL_FEATURE_COLS = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    if 'Salary_USD' in ALL_FEATURE_COLS:
+        ALL_FEATURE_COLS.remove('Salary_USD')
+
+    # 2. Identify the columns that are based on user input (the original object columns)
+    USER_INPUT_COLS = ['AI_Adoption_Level', 'Automation_Risk_Label', 'Industry', 'Job_Title']
+    
+    # 3. Identify columns that need imputation (The "other 5" features)
+    IMPUTATION_COLS = [col for col in ALL_FEATURE_COLS if col not in USER_INPUT_COLS]
+    
+    # 4. Global store for imputed feature means
+    NUMERIC_MEANS = {}
+    for col in IMPUTATION_COLS:
+        NUMERIC_MEANS[col] = df[col].mean()
 
     # Load the trained model
     try:
         regression_model = joblib.load("multiple_regression_model.pkl")
         model_loaded = True
+        # Sanity check: verify model expects 9 features (as per error report)
+        if len(ALL_FEATURE_COLS) != 9:
+             st.warning(f"Feature count mismatch detected during setup. Training data had {len(ALL_FEATURE_COLS)} features, but the model expects 9. Prediction might be unstable.")
     except FileNotFoundError:
         st.error("Error: 'multiple_regression_model.pkl' not found. Cannot perform salary prediction.")
         model_loaded = False
@@ -132,6 +156,8 @@ if data_loaded:
 
             # Summary Stats
             st.subheader("📊 Summary Statistics for Selected Industry")
+            # Note: Displaying the original 'Automation_Risk' which is now an integer, 
+            # as the original training likely used the integer version of the column.
             st.dataframe(
                 filtered_df[['Salary_USD', 'Automation_Risk']].describe().round(0)
             )
@@ -219,9 +245,11 @@ if data_loaded:
             st.warning("Prediction is unavailable because the model file could not be loaded.")
         else:
             # 1. Collect user inputs
+            # Use the original object columns for user selection, but the encoded columns for prediction
             job_titles = sorted(df["Job_Title"].unique())
             industries = sorted(df["Industry"].unique())
-            risk_levels = sorted(df["Automation_Risk_Label"].unique())
+            # For risk levels, use the readable labels
+            risk_labels = sorted(df["Automation_Risk_Label"].unique())
             ai_adoption_levels = sorted(df["AI_Adoption_Level"].unique())
             
             with st.form("salary_prediction_form"):
@@ -230,7 +258,7 @@ if data_loaded:
                 
                 with col_a:
                     input_job = st.selectbox("Job Title", job_titles, key="pred_job")
-                    input_risk = st.selectbox("Automation Risk Level", risk_levels, key="pred_risk")
+                    input_risk = st.selectbox("Automation Risk Level", risk_labels, key="pred_risk")
                 
                 with col_b:
                     input_industry = st.selectbox("Industry", industries, key="pred_industry")
@@ -240,71 +268,35 @@ if data_loaded:
 
             if predict_button:
                 try:
-                    # 2. Replicate Preprocessing (Encoding)
-                    # Create a dictionary of the user's encoded feature values
-                    # IMPORTANT: These must be in the order the model expects, 
-                    # and the keys must match the features used during training.
+                    # 2. Construct the 9-feature vector for prediction
                     
-                    # NOTE: We assume the features were the encoded versions of the 
-                    # following four columns, as they are the primary categorical ones.
+                    # 2.1 Start with a dictionary of all features, initialized with imputed means
+                    prediction_features = {}
+                    for col, mean_val in NUMERIC_MEANS.items():
+                        prediction_features[col] = mean_val
                     
-                    # 2.1 Get encoded values
-                    encoded_job = ENCODER_MAP['Job_Title'].transform([input_job])[0]
-                    encoded_industry = ENCODER_MAP['Industry'].transform([input_industry])[0]
-                    encoded_risk = ENCODER_MAP['Automation_Risk_Label'].transform([input_risk])[0]
-                    encoded_ai_adoption = ENCODER_MAP['AI_Adoption_Level'].transform([input_ai_adoption])[0]
+                    # 2.2 Overlay the 4 user-provided features (Encoded values)
+                    # We use the ENCODER_MAP to transform the user's string input into the trained integer value.
                     
-                    # 2.2 Create the input array for the model
-                    # The order of features MUST match the training data (e.g., [Job_Title_Encoded, Industry_Encoded, ...])
-                    # Since we don't know the exact order, we create a feature vector based on assumed feature names:
+                    # Job Title is the original categorical name
+                    prediction_features['Job_Title'] = ENCODER_MAP['Job_Title'].transform([input_job])[0]
                     
-                    # Create a sample DataFrame row with encoded data
-                    input_data = pd.DataFrame([[encoded_ai_adoption, encoded_risk, encoded_industry, encoded_job]], 
-                                            columns=['AI_Adoption_Level', 'Automation_Risk_Label', 'Industry', 'Job_Title'])
+                    # Industry is the original categorical name
+                    prediction_features['Industry'] = ENCODER_MAP['Industry'].transform([input_industry])[0]
                     
-                    # Since the original training script defined X as:
-                    # X = data[['AI_Adoption_Level', 'Automation_Risk', 'Industry', 'Job_Title', ...]] (after encoding)
-                    # We will re-run the full encoding on the main DataFrame to get the exact feature set and order:
+                    # Automation_Risk_Label is the original categorical name for the risk label
+                    prediction_features['Automation_Risk_Label'] = ENCODER_MAP['Automation_Risk_Label'].transform([input_risk])[0]
                     
-                    # 3. Create a template DataFrame to ensure feature order
-                    # This is the safest way to ensure the column order is correct if not all encoded columns were used.
-                    
-                    # Get the columns that are now integer/float after encoding
-                    feature_cols_encoded = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
-                    feature_cols_encoded.remove('Salary_USD')
-                    
-                    # Recreate the input vector matching the training feature order
-                    
-                    # Map the user inputs to a dictionary corresponding to the encoded feature names
-                    input_dict = {
-                        'Job_Title': encoded_job,
-                        'Industry': encoded_industry,
-                        'Automation_Risk_Label': encoded_risk,
-                        'AI_Adoption_Level': encoded_ai_adoption
-                    }
-                    
-                    # For safety, we fill an array with 0s and set the values for the known features
-                    # The number of features might be more than the 4 we've collected if other numeric columns exist.
-                    
-                    # A robust solution requires knowing ALL feature columns used in training. 
-                    # Assuming only the 4 main object columns (now encoded numbers) were used:
-                    
-                    X_input = np.array([[encoded_ai_adoption, encoded_risk, encoded_industry, encoded_job]])
+                    # AI_Adoption_Level is the original categorical name
+                    prediction_features['AI_Adoption_Level'] = ENCODER_MAP['AI_Adoption_Level'].transform([input_ai_adoption])[0]
 
-                    # A better, more reliable vector construction (assuming all four are features)
-                    # This relies on the internal numeric representation of the columns in the training data, 
-                    # which is hard to guarantee without seeing the intermediate 'data' DataFrame in the training script.
-                    # We will use the simplest array based on the most likely feature order:
+                    # 2.3 Create the final input array, ensuring the column order matches ALL_FEATURE_COLS
+                    X_predict_ordered = [prediction_features[col] for col in ALL_FEATURE_COLS]
                     
-                    X_predict = [
-                        ENCODER_MAP['AI_Adoption_Level'].transform([input_ai_adoption])[0], 
-                        ENCODER_MAP['Automation_Risk_Label'].transform([input_risk])[0], 
-                        ENCODER_MAP['Industry'].transform([input_industry])[0], 
-                        ENCODER_MAP['Job_Title'].transform([input_job])[0]
-                    ]
+                    # 3. Make Prediction (requires a 2D array [[]])
+                    X_predict_array = np.array([X_predict_ordered])
                     
-                    # 3. Make Prediction
-                    prediction = regression_model.predict(np.array([X_predict]))[0]
+                    prediction = regression_model.predict(X_predict_array)[0]
                     predicted_salary = max(0, prediction) # Salary cannot be negative
                     
                     # 4. Display Result
@@ -323,6 +315,9 @@ if data_loaded:
                 except KeyError as e:
                     st.error(f"Prediction Error: A feature value ({e}) was not present in the original training data. Please try another selection.")
                 except Exception as e:
+                    # Display the feature array shape for debugging if an unexpected error occurs
                     st.error(f"An unexpected error occurred during prediction: {e}")
+                    # This line is crucial for diagnosis and will show the user what went wrong with the shape
+                    st.error(f"Debug Info: Predicted feature count: {len(X_predict_ordered)}. Expected feature count: 9.")
 
 st.caption("Developed by Isaiah Panicker • Data Science Project")
