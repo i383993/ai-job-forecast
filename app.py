@@ -7,6 +7,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 import streamlit as st
+import plotly.express as px
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
@@ -207,7 +208,7 @@ def main() -> None:
         st.dataframe(pd.DataFrame(df.dtypes, columns=["dtype"]))
 
     # Tabs for analysis
-    t_overview, t_univariate, t_bivariate, t_corr, t_models, t_reco = st.tabs(
+    t_overview, t_univariate, t_bivariate, t_corr, t_models, t_reco, t_nav, t_geo = st.tabs(
         [
             "Overview",
             "Univariate",
@@ -215,6 +216,8 @@ def main() -> None:
             "Correlation",
             "Models",
             "Recommendations",
+            "AI Career Navigator",
+            "Geography",
         ]
     )
 
@@ -333,6 +336,176 @@ def main() -> None:
                 st.pyplot(fig, use_container_width=True)
         else:
             st.info("Dataset missing required columns for recommendations.")
+
+
+    # Plotly-powered navigator views from user's request
+    with t_nav:
+        st.markdown("### 🤖 AI Career Navigator: Market Insights & Deep Dives")
+        st.markdown("Explore macro market trends or dive deep into the risk and salary profiles of specific job titles.")
+
+        # Light preprocessing for robustness
+        work = df.copy()
+        if "Salary_USD" in work.columns:
+            work["Salary_USD"] = pd.to_numeric(work["Salary_USD"], errors="coerce")
+        risk_map = {0: "Low/None", 1: "Moderate", 2: "High/Advanced"}
+        if "Automation_Risk" in work.columns:
+            if str(work["Automation_Risk"].dtype) in ["int64", "float64"]:
+                work["Automation_Risk_Label"] = work["Automation_Risk"].map(risk_map).fillna("Unknown")
+            else:
+                work["Automation_Risk_Label"] = work["Automation_Risk"].astype(str)
+
+        mode = st.radio(
+            "Select Analysis Mode",
+            ("Industry Analysis", "Job Title Deep Dive"),
+            horizontal=True,
+            index=0,
+        )
+
+        if mode == "Industry Analysis":
+            st.subheader("1. Macro-Level Industry Analysis")
+            if "Industry" not in work.columns:
+                st.warning("Column `Industry` not found in dataset.")
+            else:
+                industries = sorted(work["Industry"].dropna().unique().tolist())
+                selected_industry = st.selectbox("Select Industry to Filter By", industries, key="industry_select")
+                filtered = work[work["Industry"] == selected_industry]
+
+                if filtered.empty:
+                    st.warning(f"No data available for the selected industry: {selected_industry}")
+                else:
+                    # Salary distribution (box)
+                    if "Salary_USD" in filtered.columns:
+                        fig_salary = px.box(
+                            filtered,
+                            y="Salary_USD",
+                            title=f"Salary Distribution Across All Jobs in {selected_industry}",
+                            labels={"Salary_USD": "Annual Salary (USD)"},
+                            color_discrete_sequence=px.colors.qualitative.Plotly,
+                        )
+                        st.plotly_chart(fig_salary, use_container_width=True)
+
+                    # Automation risk distribution (global)
+                    if {"Automation_Risk_Label", "AI_Adoption_Level"}.issubset(work.columns):
+                        fig_auto = px.histogram(
+                            work,
+                            x="Automation_Risk_Label",
+                            color="AI_Adoption_Level",
+                            title="Automation Risk Distribution by AI Adoption Level (Global)",
+                            labels={"Automation_Risk_Label": "Automation Risk Level"},
+                            category_orders={"Automation_Risk_Label": ["Low/None", "Moderate", "High/Advanced"]},
+                            color_discrete_sequence=px.colors.qualitative.G10,
+                        )
+                        st.plotly_chart(fig_auto, use_container_width=True)
+
+                    # Insight
+                    st.subheader("📈 AI Impact Insight")
+                    risk_levels = filtered.get("Automation_Risk_Label", pd.Series(dtype=str)).unique().tolist()
+                    if "High/Advanced" in risk_levels:
+                        st.warning(
+                            f"🚨 High automation risk detected among some job roles in {selected_industry} — potential job displacement likely without upskilling."
+                        )
+                    else:
+                        st.success(
+                            f"✅ {selected_industry} currently shows stable or growing job trends relative to AI displacement risk."
+                        )
+
+                    # Summary stats
+                    if {"Salary_USD", "Automation_Risk"}.issubset(filtered.columns):
+                        st.subheader("📊 Summary Statistics for Selected Industry")
+                        st.dataframe(filtered[["Salary_USD", "Automation_Risk"]].describe().round(0))
+
+        else:  # Job Title Deep Dive
+            st.subheader("2. Detailed Job Title Profile")
+            if "Job_Title" not in work.columns:
+                st.warning("Column `Job_Title` not found in dataset.")
+            else:
+                job_titles = sorted(work["Job_Title"].dropna().unique().tolist())
+                selected_job = st.selectbox("Select a Job Title for Deep Dive Analysis", job_titles, key="job_select")
+                job_df = work[work["Job_Title"] == selected_job]
+
+                if job_df.empty:
+                    st.warning(f"No data available for the selected job title: {selected_job}")
+                else:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if "Salary_USD" in job_df.columns:
+                            fig_job_salary = px.histogram(
+                                job_df,
+                                x="Salary_USD",
+                                marginal="box",
+                                title=f"Salary Distribution for: {selected_job}",
+                                labels={"Salary_USD": "Annual Salary (USD)"},
+                                color_discrete_sequence=["#4CAF50"],
+                            )
+                            st.plotly_chart(fig_job_salary, use_container_width=True)
+                    with col2:
+                        avg_salary = float(job_df["Salary_USD"].mean()) if "Salary_USD" in job_df.columns else float("nan")
+                        risk_level = (
+                            job_df.get("Automation_Risk_Label", pd.Series(["Unknown"])) .mode()[0]
+                            if "Automation_Risk_Label" in job_df.columns and not job_df["Automation_Risk_Label"].empty
+                            else "Unknown"
+                        )
+                        top_industries = (
+                            job_df["Industry"].value_counts().head(3).index.tolist()
+                            if "Industry" in job_df.columns else []
+                        )
+                        st.subheader(f"Key Insights for {selected_job}")
+                        if not np.isnan(avg_salary):
+                            st.metric(label="Average Reported Salary", value=f"${avg_salary:,.0f}", delta_color="off")
+                        st.markdown("**Automation Risk:**")
+                        if risk_level == "High/Advanced":
+                            st.error(f"**{risk_level}** - High vulnerability to AI displacement.")
+                        elif risk_level == "Moderate":
+                            st.warning(f"**{risk_level}** - Some tasks are automatable; continuous upskilling is advised.")
+                        else:
+                            st.success(f"**{risk_level}** - Stable outlook, often requiring high-level human judgment.")
+                        if top_industries:
+                            st.markdown(f"**Top Industries:** {', '.join(top_industries)}")
+
+                    st.markdown("---")
+
+                    if {"AI_Adoption_Level", "Salary_USD"}.issubset(job_df.columns):
+                        fig_adoption_salary = px.strip(
+                            job_df,
+                            x="AI_Adoption_Level",
+                            y="Salary_USD",
+                            color="Industry" if "Industry" in job_df.columns else None,
+                            title=f"Salary Spread by AI Adoption Level for {selected_job}",
+                            labels={"Salary_USD": "Annual Salary (USD)", "AI_Adoption_Level": "Industry AI Adoption"},
+                            stripmode="overlay",
+                            color_discrete_sequence=px.colors.qualitative.Dark24,
+                        )
+                        st.plotly_chart(fig_adoption_salary, use_container_width=True)
+
+        st.caption("Developed by Isaiah Panicker • Data Science Project")
+
+    with t_geo:
+        st.markdown("### 🌍 Jobs by Country/Location")
+        # Prefer a 'Country' column if present; fall back to 'Location'
+        geo_col = "Country" if "Country" in df.columns else ("Location" if "Location" in df.columns else None)
+        if geo_col is None:
+            st.info("No `Country` or `Location` column found for geographic visualization.")
+        else:
+            counts = df[geo_col].astype(str).value_counts().reset_index()
+            counts.columns = [geo_col, "Jobs"]
+            st.subheader("Jobs count by location")
+            fig_bar = px.bar(counts.head(30), x=geo_col, y="Jobs", title="Top Locations by Job Count")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            # Choropleth only if we have a Country column (names likely to match)
+            if geo_col == "Country":
+                try:
+                    fig_map = px.choropleth(
+                        counts,
+                        locations="Country",
+                        locationmode="country names",
+                        color="Jobs",
+                        color_continuous_scale="Blues",
+                        title="Jobs per Country",
+                    )
+                    st.plotly_chart(fig_map, use_container_width=True)
+                except Exception:
+                    st.caption("Could not render world map; showing bar chart instead.")
 
 
 if __name__ == "__main__":
