@@ -337,6 +337,90 @@ def main() -> None:
         else:
             st.info("Dataset missing required columns for recommendations.")
 
+        st.markdown("---")
+        st.markdown("### Personalized Low-Risk Job Recommender")
+        # Build a robust working copy with normalized risk labels
+        rec_df = df.copy()
+        if "Automation_Risk" in rec_df.columns:
+            # map numerics to strings if needed
+            num_to_str = {0: "Low", 1: "Medium", 2: "High"}
+            if str(rec_df["Automation_Risk"].dtype) in ["int64", "float64"]:
+                rec_df["Automation_Risk_Label"] = rec_df["Automation_Risk"].map(num_to_str).fillna("Unknown")
+            else:
+                # unify capitalization
+                rec_df["Automation_Risk_Label"] = rec_df["Automation_Risk"].astype(str).str.title()
+        else:
+            rec_df["Automation_Risk_Label"] = "Unknown"
+
+        # Filters
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            industry_opts = ["All"] + sorted(rec_df.get("Industry", pd.Series(dtype=str)).dropna().unique().tolist())
+            f_industry = st.selectbox("Industry", industry_opts)
+        with c2:
+            geo_col = "Country" if "Country" in rec_df.columns else ("Location" if "Location" in rec_df.columns else None)
+            loc_opts = ["All"] + (sorted(rec_df[geo_col].astype(str).dropna().unique().tolist()) if geo_col else [])
+            f_location = st.selectbox("Country/Location", loc_opts)
+        with c3:
+            remote_opts = ["All"] + sorted(rec_df.get("Remote_Friendly", pd.Series(dtype=str)).dropna().unique().tolist())
+            f_remote = st.selectbox("Remote Friendly", remote_opts)
+        with c4:
+            min_salary = st.number_input("Min Salary (USD)", min_value=0, value=0, step=1000)
+
+        # Apply filters and prioritize low risk + higher salary + growth
+        filt = rec_df[rec_df["Automation_Risk_Label"] == "Low"].copy()
+        if f_industry != "All" and "Industry" in filt.columns:
+            filt = filt[filt["Industry"] == f_industry]
+        if geo_col and f_location != "All":
+            filt = filt[filt[geo_col].astype(str) == f_location]
+        if f_remote != "All" and "Remote_Friendly" in filt.columns:
+            filt = filt[filt["Remote_Friendly"] == f_remote]
+        if "Salary_USD" in filt.columns:
+            filt = filt[pd.to_numeric(filt["Salary_USD"], errors="coerce") >= min_salary]
+
+        # Growth prioritization if available
+        growth_order = {"Growth": 2, "Stable": 1, "Decline": 0}
+        if "Job_Growth_Projection" in filt.columns:
+            filt["_growth_rank"] = filt["Job_Growth_Projection"].map(growth_order).fillna(0)
+        else:
+            filt["_growth_rank"] = 0
+
+        if "Salary_USD" not in filt.columns:
+            st.info("No `Salary_USD` column available to sort recommendations.")
+        else:
+            filt_sorted = (
+                filt.sort_values(["_growth_rank", "Salary_USD"], ascending=[False, False])
+                .drop(columns=["_growth_rank"], errors="ignore")
+            )
+
+            n_recs = st.slider("Number of recommendations", 5, 30, 10)
+            rec_cols = [
+                c for c in [
+                    "Job_Title",
+                    "Industry",
+                    geo_col if geo_col else None,
+                    "Salary_USD",
+                    "Remote_Friendly",
+                    "AI_Adoption_Level",
+                    "Job_Growth_Projection",
+                ]
+                if c and c in filt_sorted.columns
+            ]
+            st.dataframe(filt_sorted.head(n_recs).loc[:, rec_cols], use_container_width=True)
+
+            if {"Job_Title", "Salary_USD"}.issubset(filt_sorted.columns):
+                fig_lr, ax_lr = plt.subplots(figsize=(8, 4))
+                sns.barplot(
+                    data=filt_sorted.head(min(n_recs, 20)),
+                    x="Job_Title",
+                    y="Salary_USD",
+                    ax=ax_lr,
+                    color="#2E86C1",
+                )
+                ax_lr.set_title("Recommended Low-Risk Jobs (by Salary)")
+                plt.xticks(rotation=45, ha="right")
+                st.pyplot(fig_lr, use_container_width=True)
+
 
     # Plotly-powered navigator views from user's request
     with t_nav:
