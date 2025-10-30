@@ -167,7 +167,7 @@ def train_models(df_encoded: pd.DataFrame) -> Tuple[Dict[str, Tuple[float, float
 
 
 def main() -> None:
-    st.title("🧠 Forecasting AI-Induced Job Displacement")
+    st.title("Forecasting AI-Induced Job Displacement")
     st.caption("Explore job market data, visualize trends, and compare salary prediction models.")
 
     with st.sidebar:
@@ -594,6 +594,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
