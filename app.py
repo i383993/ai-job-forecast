@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
     XGB_AVAILABLE = False
 
 
-st.set_page_config(page_title="AI Job Displacement Explorer", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="AI Job Displacement Explorer", page_icon="", layout="wide")
 sns.set_theme(style="whitegrid")
 
 
@@ -424,7 +424,7 @@ def main() -> None:
 
     # Plotly-powered navigator views from user's request
     with t_nav:
-        st.markdown("### 🤖 AI Career Navigator: Market Insights & Deep Dives")
+        st.markdown("###  AI Career Navigator: Market Insights & Deep Dives")
         st.markdown("Explore macro market trends or dive deep into the risk and salary profiles of specific job titles.")
 
         # Light preprocessing for robustness
@@ -594,5 +594,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
